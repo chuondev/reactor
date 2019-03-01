@@ -39,7 +39,7 @@ public class Reactor implements Runnable {
 		serverSocket.socket().bind(new InetSocketAddress(port)); // 绑定端口
 		serverSocket.configureBlocking(false); // 设置成非阻塞模式
 		SelectionKey sk = serverSocket.register(selector, SelectionKey.OP_ACCEPT); // 注册到 选择器 并设置处理 socket 连接事件
-		// 添加一个附加对象
+		// 添加一个附加对象，关注的事件发生时用于处理
 		sk.attach(new Acceptor());
 		
 		System.out.println(LOG_PROMPT + ": Listening on port " + port);
@@ -55,7 +55,7 @@ public class Reactor implements Runnable {
 				while (it.hasNext()) {
 					SelectionKey skTmp = it.next();
 					
-					String action = "";
+					String action = ""; // 此字段用于日志输出，便于理解，无其他含义
 					if (skTmp.isReadable()) {
 						action = "OP_READ";
 					} else if (skTmp.isWritable()) {
@@ -81,7 +81,12 @@ public class Reactor implements Runnable {
 		Runnable r = (Runnable) (k.attachment()); // 拿到通道注册时附加的对象
 		if (r != null) r.run();
 	}
-
+	
+	/**
+	 * 处理连接建立事件
+	 * 
+	 * @author wskwbog
+	 */
 	class Acceptor implements Runnable {
 		@Override
 		public void run() {
