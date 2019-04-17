@@ -1,14 +1,15 @@
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.util.Iterator;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Semaphore;
 
 /**
  * 为了匹配 CPU 和 IO 的速率，可设计多个 Reactor（即 Selector 池）：<p>
@@ -93,24 +94,19 @@ public class MultiReactor {
 				// 接收连接，非阻塞模式下，没有连接直接返回 null
 				SocketChannel sc = serverSocket.accept(); 
 				if (sc != null) {
+					// 把提示发到界面
+					sc.write(ByteBuffer.wrap("Implementation of Reactor Design Partten by tonwu.net\r\nreactor> ".getBytes()));
+					
 					System.out.println("mainReactor-" + "Acceptor: " + sc.socket().getLocalSocketAddress() +" 注册到 subReactor-" + next);
-					/* 将接收的连接注册到从 Reactor 上 */
-					// 发现无法直接注册，一直获取不到锁
-					// 这是由于 从 Reactor 目前正阻塞在 select() 方法上，此方法已经锁定了 publicKeys（已注册的key)，直接注册会造成死锁
-					// 如何解决呢，直接调用 wakeup，有可能还没有注册成功又阻塞了，并且这里的 主从 Reactor 使用的是同一个类？
-                    // 可以使用信号量或者 CountDownLatch 让 从Reactor 从 select 返回后先阻塞，等注册完后在执行
-					// 使用一个信号量资源数目为 1，select() 返回首先获取资源，如果获取不到那就是有连接在注册，只针对从 Reactor，主 Reactor 始终都能获取到资源
+					// 将接收的连接注册到从 Reactor 上 
+					
+					// 发现无法直接注册，一直获取不到锁，这是由于 从 Reactor 目前正阻塞在 select() 方法上，此方法已经
+					// 锁定了 publicKeys（已注册的key)，直接注册会造成死锁
+					
+					// 如何解决呢，直接调用 wakeup，有可能还没有注册成功又阻塞了。这是一个多线程同步的问题，可以借助队列进行处理
 					Reactor subReactor = subReactors[next];
-					Selector subSel = subReactor.getSelector();
-					try {
-						subReactor.semaphore.acquire(); // 首先占住资源
-						subSel.wakeup(); // 唤醒 selector，它会释放对 publicKeys 的锁定，并且阻塞等待资源
-						new BasicHandler(subSel, sc); // 将连接的通道注册到这个从 Reactor 上（这个 Handler 初始时调用了 wakeup）
-//						new MultithreadHandler(subSel, sc);
-					} finally {
-						subReactor.semaphore.release(); // 释放资源，此时 从Reactor 获取到资源，继续后续处理
-						subSel.wakeup(); // 当 从Reactor 处理完毕后，调用 select，会立马返回，处理新注册通道的读写
-					}
+					subReactor.reigster(new BasicHandler(sc));
+//					new MultithreadHandler(subSel, sc);
 					if(++next == subReactors.length) next = 0;
 				}
 			} catch (Exception ex) {
@@ -119,12 +115,8 @@ public class MultiReactor {
 		}
 	}
     
-	/**
-	 * 对 Selector 的封装，主要是调用 SelectionKey.attachment() 的 run 方法 <p>
-	 * attachment 可能是 Acceptor 或者 Handler
-	 */
     static class Reactor implements Runnable {
-    	final Semaphore semaphore = new Semaphore(1); // 控制 从 Reactor 注册通道
+    	private ConcurrentLinkedQueue<BasicHandler> events = new ConcurrentLinkedQueue<>();
         final Selector selector;
         public Reactor() throws IOException {
             selector = Selector.open();
@@ -136,21 +128,22 @@ public class MultiReactor {
         public void run() { // normally in a new Thread
             try {
                 while (!Thread.interrupted()) { // 死循环
-                	try {
-                		selector.select(); // 阻塞，直到有通道事件就绪
-                		semaphore.acquire(); // 是否有通道在注册，有则阻塞，无则继续执行
-                		Set<SelectionKey> selected = selector.selectedKeys(); // 拿到就绪通道 SelectionKey 的集合
-                		Iterator<SelectionKey> it = selected.iterator();
-                		while (it.hasNext()) {
-                			SelectionKey skTmp = it.next();
-                			dispatch(skTmp); // 根据 key 的事件类型进行分发
-                		}
-                		selected.clear(); // 清空就绪通道的 key
-                	} catch (InterruptedException e) {
-                		e.printStackTrace();
-					} finally {
-						semaphore.release();
+                	BasicHandler handler = null;
+                	while ((handler = events.poll()) != null) {
+                		handler.socket.configureBlocking(false); // 设置非阻塞
+                		// Optionally try first read now
+                		handler.sk = handler.socket.register(selector, SelectionKey.OP_READ); // 注册通道
+                		handler.sk.attach(handler); // 管理事件的处理程序
+                	}
+                	
+                	selector.select(); // 阻塞，直到有通道事件就绪
+					Set<SelectionKey> selected = selector.selectedKeys(); // 拿到就绪通道 SelectionKey 的集合
+					Iterator<SelectionKey> it = selected.iterator();
+					while (it.hasNext()) {
+						SelectionKey skTmp = it.next();
+						dispatch(skTmp); // 根据 key 的事件类型进行分发
 					}
+					selected.clear(); // 清空就绪通道的 key
                 }
             } catch (IOException ex) {
                 ex.printStackTrace();
@@ -161,5 +154,11 @@ public class MultiReactor {
             Runnable r = (Runnable) (k.attachment()); // 拿到通道注册时附加的对象
             if (r != null) r.run();
         }
+        
+        void reigster(BasicHandler basicHandler) {
+        	events.offer(basicHandler);
+        	selector.wakeup();
+        }
+        
     }
 }

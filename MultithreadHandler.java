@@ -1,3 +1,4 @@
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
@@ -10,15 +11,12 @@ import java.util.concurrent.Executors;
  * 
  * @see Reactor
  * @see BasicHandler
- * @author wskwbog
+ * @author tongwu.net
  */
 public class MultithreadHandler extends BasicHandler {
 	
 	static Executor workPool = Executors.newFixedThreadPool(5);
-	static {
-		LOG_PROMPT = "MultithreadHandler";
-	}
-	static final int PROCESSING = 3;
+	static final int PROCESSING = 4;
 	private Object lock = new Object();
 	
 	public MultithreadHandler(Selector sel, SocketChannel sc) throws IOException {
@@ -29,9 +27,7 @@ public class MultithreadHandler extends BasicHandler {
 	public void read() throws IOException {
 		synchronized (lock) {
 			int n = socket.read(input);
-			System.out.println(LOG_PROMPT + ": Start reading ... ");
 			if (inputIsComplete(n)) {
-				System.out.println(LOG_PROMPT + ": End of reading and Submit to thread pool processing ...");
 				
 				// 读取完毕后将后续的处理交给
 				state = PROCESSING;
@@ -42,8 +38,15 @@ public class MultithreadHandler extends BasicHandler {
 	
 	private void processAndHandOff() {
 		synchronized (lock) {
-			process();
-			System.out.println(LOG_PROMPT + ": Process end start sending ...");
+			try {
+				process();
+			} catch (EOFException e) {
+				// 直接关闭连接
+				try {
+					sk.channel().close();
+				} catch (IOException e1) {}
+				return;
+			}
 			
 			// 最后的发送还是交给 Reactor 线程处理
 			state = SENDING;
@@ -59,7 +62,6 @@ public class MultithreadHandler extends BasicHandler {
 	class Processer implements Runnable {
 		@Override
 		public void run() {
-			System.out.println(LOG_PROMPT + ".Processer: Process and handoff");
 			processAndHandOff();
 		}
 	}
