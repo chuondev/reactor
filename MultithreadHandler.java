@@ -25,7 +25,11 @@ public class MultithreadHandler extends BasicHandler {
 
 	@Override
 	public void read() throws IOException {
+		// 为什么要同步？Processer 线程处理时通道还有可能有读事件发生
+		// 保护 input ByteBuffer 不会重置和状态的可见性
+		// 应该是这样
 		synchronized (lock) {
+			input.clear();
 			int n = socket.read(input);
 			if (inputIsComplete(n)) {
 				
