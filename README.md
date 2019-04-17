@@ -28,10 +28,10 @@ java MultiReactor
 
 ```bash
 D:\>telnet 127.0.0.1 10393
-Hello Reactor, I am wskwbog.
-Echo > Hello Reactor, I am wskwbog.
-
-Echo >
+Implementation of Reactor Design Partten by tonwu.net
+reactor> Hello World!
+Hello World!
+reactor>
 
 遗失对主机的连接。
 D:\>
