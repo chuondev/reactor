@@ -7,7 +7,7 @@
 - MultithreadHandler: 线程池处理器
 - Reactor: 接收连接，I/O 读写
 
-Reactor 模型的说明：https://www.cnblogs.com/wskwbog/p/10725372.html
+Reactor 模型的说明：https://www.cnblogs.com/chuonye/p/10725372.html
 
 ## Getting started
 
